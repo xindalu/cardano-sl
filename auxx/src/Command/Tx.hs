@@ -173,9 +173,15 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         --
         -- While we're sending, we're constructing the second batch of
         -- transactions.
+        logInfo "First batch first time started sending."
         void $
-            concurrently (forM_ secondBatch addTx) $
+            -- concurrently (forM_ secondBatch addTx) $
             concurrently writeTPS (sendTxsConcurrently duration)
+        logInfo "First batch first time finished sending."
+        forM_ firstBatch addTx
+        logInfo "First batch second time started sending."
+        void $ concurrently writeTPS (sendTxsConcurrently duration)
+        logInfo "First batch second time finished sending."
 
 ----------------------------------------------------------------------------
 -- Casual sending
