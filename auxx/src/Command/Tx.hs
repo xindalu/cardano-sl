@@ -174,14 +174,18 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         -- While we're sending, we're constructing the second batch of
         -- transactions.
         logInfo "First batch first time started sending."
-        void $
+        -- void $
             -- concurrently (forM_ secondBatch addTx) $
-            concurrently writeTPS (sendTxsConcurrently duration)
+            -- concurrently writeTPS (sendTxsConcurrently duration)
         logInfo "First batch first time finished sending."
-        forM_ firstBatch addTx
-        logInfo "First batch second time started sending."
-        void $ concurrently writeTPS (sendTxsConcurrently duration)
-        logInfo "First batch second time finished sending."
+        -- forM_ firstBatch addTx
+        -- logInfo "First batch second time started sending."
+        -- void $ concurrently writeTPS (sendTxsConcurrently duration)
+        -- logInfo "First batch second time finished sending."
+        logInfo "Trying send starts."
+        let txOuts' = txOut1 :| []
+        send diffusion 0 txOuts'
+        logInfo "Trying send finished."
 
 ----------------------------------------------------------------------------
 -- Casual sending
@@ -222,7 +226,9 @@ send diffusion idx outputs = do
         | idx == -1 = do
             _userSecret <- view userSecret >>= atomically . readTVar
             pure $ maybe (error "Unknown wallet address") (^. wusRootKey) (_userSecret ^. usWallet)
-        | otherwise = (!! idx) <$> getSecretKeysPlain
+        | otherwise = do
+            logInfo $ show idx
+            (!! idx) <$> getSecretKeysPlain
 
 ----------------------------------------------------------------------------
 -- Send from file
