@@ -7601,8 +7601,8 @@ inherit (pkgs) mesa;};
          , generic-arbitrary, hashable, http-client, http-client-tls
          , http-conduit, lens, log-warper, memory, mtl, QuickCheck
          , reflection, resourcet, rocksdb-haskell-ng, safe-exceptions
-         , serokell-util, stdenv, stm, tagged, template-haskell, text
-         , text-format, time-units, transformers, universum, unliftio
+         , serokell-util, stdenv, stm, tagged, template-haskell, text-format
+         , time-units, transformers, universum, unliftio
          , unordered-containers
          }:
          mkDerivation {
@@ -7617,8 +7617,8 @@ inherit (pkgs) mesa;};
              exceptions formatting generic-arbitrary hashable http-client
              http-client-tls http-conduit lens log-warper memory mtl QuickCheck
              reflection resourcet rocksdb-haskell-ng safe-exceptions
-             serokell-util stm tagged template-haskell text text-format
-             time-units transformers universum unliftio unordered-containers
+             serokell-util stm tagged template-haskell text-format time-units
+             transformers universum unliftio unordered-containers
            ];
            libraryToolDepends = [ cpphs ];
            doHaddock = false;
