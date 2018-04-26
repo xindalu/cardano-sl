@@ -38,7 +38,7 @@ import           Pos.Client.Txp.Balances (getOwnUtxoForPk)
 import           Pos.Client.Txp.Network (prepareMTx, submitTxRaw)
 import           Pos.Client.Txp.Util (createTx)
 import           Pos.Core (BlockVersionData (bvdSlotDuration), IsBootstrapEraAddr (..),
-                           Timestamp (..), deriveFirstHDAddress, makePubKeyAddress, mkCoin)
+                           Timestamp (..), deriveFirstHDAddress, getCoin, makePubKeyAddress, mkCoin)
 import           Pos.Core.Configuration (genesisBlockVersionData, genesisSecretKeys)
 import           Pos.Core.Txp (TxAux (..), TxIn (TxInUtxo), TxOut (..), TxOutAux (..), txaF)
 import           Pos.Crypto (EncryptedSecretKey, emptyPassphrase, encToPublic, fakeSigner, hash,
@@ -110,20 +110,13 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         let startAt = fromMaybe 0 . readMaybe . fromMaybe "" $ startAtTxt :: Int
         -- construct transaction output
         outAddr <- makePubKeyAddressAuxx (toPublic (fromMaybe (error "sendToAllGenesis: no keys") $ head keysToSend))
-        let val1 = mkCoin 1000000
-            txOut1 = TxOut {
+        let txOut1 = TxOut {
                 txOutAddress = outAddr,
-                txOutValue = val1
+                txOutValue = mkCoin 1
                 }
             txOuts = TxOutAux txOut1 :| []
-            val2 = mkCoin 5
-            txOut2 = TxOut {
-                txOutAddress = outAddr,
-                txOutValue = val2
-                }
-            txOuts2 = TxOutAux txOut2 :| []
         -- construct a transaction, and add it to the queue
-        let addTx secretKey = do
+            addTx secretKey = do
                 utxo <- getOwnUtxoForPk $ safeToPublic (fakeSigner secretKey)
                 etx <- createTx mempty utxo (fakeSigner secretKey) txOuts (toPublic secretKey)
                 case etx of
@@ -131,8 +124,12 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                     Right (tx, txOut1new) -> do
                         logInfo $ "Utxo: " <> show utxo
                         logInfo $ "txOut1new: " <> show txOut1new
+                        let txOut1' = TxOut {
+                                txOutAddress = outAddr,
+                                txOutValue = mkCoin $ (-1) + (getCoin $ txOutValue $ NE.head txOut1new) -- 636428571 -- txout1new - 1
+                                }
                         atomically (writeTQueue txQueue (tx, txOuts))
-                        atomically $ writeTQueue txQueue' (tx, txOut1new)
+                        atomically $ writeTQueue txQueue' (tx, txOut1')
         let nTrans = conc * duration -- number of transactions we'll send
             allTrans = take nTrans (drop startAt keysToSend)
             (firstBatch, secondBatch) = splitAt ((2 * nTrans) `div` 3) allTrans
@@ -192,11 +189,18 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         logInfo "First batch first time finished sending."
         logInfo "Trying send starts."
         (atomically $ tryReadTQueue txQueue') >>= \case
-            Just (tx, txOut1new) -> do
+            Just (tx, txOut1') -> do
+                outAddr' <- makePubKeyAddressAuxx (toPublic (fromMaybe (error "sendToAllGenesis: no keys") $ Just (keysToSend !! 1)))
                 let txInp = TxInUtxo (hash (taTx tx)) 0
-                    utxo' = M.fromList [(txInp, TxOutAux txOut1)]
+                    utxo' = M.fromList [(txInp, TxOutAux txOut1')]
                     Just firstsKey = head keysToSend
-                logInfo $ "Utxo: " <> show utxo'
+                    txOut2 = TxOut {
+                        txOutAddress = outAddr',
+                        txOutValue = mkCoin 1
+                        }
+                    txOuts2 = TxOutAux txOut2 :| []
+                logInfo $ "Utxo': " <> show utxo'
+                logInfo $ "txOuts2: " <> show txOuts2
                 etx' <- createTx mempty utxo' (fakeSigner firstsKey) txOuts2 (toPublic firstsKey)
                 case etx' of
                     Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
