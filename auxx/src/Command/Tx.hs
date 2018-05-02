@@ -14,6 +14,7 @@ import           Universum
 
 import           Control.Concurrent.STM.TQueue (newTQueue, tryReadTQueue, writeTQueue)
 import           Control.Exception.Safe (Exception (..), try)
+import           Control.Monad (forM, zipWithM_)
 import           Control.Monad.Except (runExceptT)
 import           Data.Aeson (eitherDecodeStrict)
 import qualified Data.ByteString as BS
@@ -108,33 +109,33 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         logInfo $ sformat ("Found "%shown%" keys in the genesis block.") (length keysToSend)
         startAtTxt <- liftIO $ lookupEnv "AUXX_START_AT"
         let startAt = fromMaybe 0 . readMaybe . fromMaybe "" $ startAtTxt :: Int
-        -- construct transaction output
-        outAddr <- makePubKeyAddressAuxx (toPublic (fromMaybe (error "sendToAllGenesis: no keys") $ head keysToSend))
-        let txOut1 = TxOut {
-                txOutAddress = outAddr,
-                txOutValue = mkCoin 1
-                }
-            txOuts = TxOutAux txOut1 :| []
         -- construct a transaction, and add it to the queue
-            addTx secretKey = do
-                utxo <- getOwnUtxoForPk $ safeToPublic (fakeSigner secretKey)
-                etx <- createTx mempty utxo (fakeSigner secretKey) txOuts (toPublic secretKey)
+        let addTx fromKey outAddr = do
+                -- construct transaction output
+                let val1 = 1
+                    txOut1 = TxOut {
+                        txOutAddress = outAddr,
+                        txOutValue = mkCoin val1
+                        }
+                    txOuts = TxOutAux txOut1 :| []
+                utxo <- getOwnUtxoForPk $ safeToPublic (fakeSigner fromKey)
+                etx <- createTx mempty utxo (fakeSigner fromKey) txOuts (toPublic fromKey)
                 case etx of
                     Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
                     Right (tx, txOut1new) -> do
                         logInfo $ "Utxo: " <> show utxo
                         logInfo $ "txOut1new: " <> show txOut1new
                         let txOut1' = TxOut {
-                                txOutAddress = outAddr,
-                                txOutValue = mkCoin $ (-1) + (getCoin $ txOutValue $ NE.head txOut1new) -- 636428571 -- txout1new - 1
+                                txOutAddress = outAddr,  -- better (.) ??
+                                txOutValue = mkCoin $ (getCoin $ txOutValue $ NE.head txOut1new) - val1 -- 636428571 -- txout1new - 1
                                 }
-                        atomically (writeTQueue txQueue (tx, txOuts))
-                        atomically $ writeTQueue txQueue' (tx, txOut1')
+                        atomically $ writeTQueue txQueue tx
+                        atomically $ writeTQueue txQueue' (tx, txOut1', fromKey, outAddr)
         let nTrans = conc * duration -- number of transactions we'll send
-            allTrans = take nTrans (drop startAt keysToSend)
-            (firstBatch, secondBatch) = splitAt ((2 * nTrans) `div` 3) allTrans
+            allTrans@(t:ts) = take nTrans (drop startAt keysToSend)
+            -- (firstBatch, secondBatch) = splitAt ((2 * nTrans) `div` 3) allTrans
             -- every <slotDuration> seconds, write the number of sent and failed transactions to a CSV file.
-        let writeTPS :: m ()
+            writeTPS :: m ()
             writeTPS = do
                 delay (sec genesisSlotDuration)
                 curTime <- show . toInteger . getTimestamp . Timestamp <$> currentTime
@@ -156,7 +157,7 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                       modifySharedAtomic tpsMVar $ \(TxCount submitted failed sending) ->
                           return (TxCount submitted failed (sending - 1), ())
                 | otherwise = (atomically $ tryReadTQueue txQueue) >>= \case
-                      Just (tx, _) -> do
+                      Just tx -> do
                           res <- submitTxRaw diffusion tx
                           addTxSubmit tpsMVar
                           logInfo $ if res
@@ -168,13 +169,39 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                       Nothing -> do
                           logInfo "No more transactions in the queue."
                           sendTxs 0
+            -- prepare Txs whose input does not belong in genesis block
+            prepareTxs :: Int -> m ()
+            prepareTxs n --remainder
+                | n <= 0 = return ()
+                | otherwise = (atomically $ tryReadTQueue txQueue') >>= \case
+                    Just (tx, txOut1', sender, receiver) -> do
+                        let txInp = TxInUtxo (hash (taTx tx)) 0
+                            utxo' = M.fromList [(txInp, TxOutAux txOut1')]
+                            txOut2 = TxOut {
+                                txOutAddress = receiver,
+                                txOutValue = mkCoin 1
+                                }
+                            txOuts2 = TxOutAux txOut2 :| []
+                        logInfo $ "Utxo': " <> show utxo'
+                        logInfo $ "txOuts2: " <> show txOut2
+                        etx' <- createTx mempty utxo' (fakeSigner sender) txOuts2 (toPublic sender)
+                        case etx' of
+                            Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
+                            Right (tx', _) -> atomically $ writeTQueue txQueue tx'
+                        -- sendTxs 1 addition to prepare another if there are not adequate
+                        -- with the same sender and receiver just writing in txQueue'
+                        logInfo "Trying send finished."
+                    Nothing -> logInfo "No more transactions in the queue2."
 
             sendTxsConcurrently n = void $ forConcurrently [1..conc] (const (sendTxs n))
         -- pre construct the first batch of transactions. Otherwise,
         -- we'll be CPU bound and will not achieve high transaction
         -- rates. If we pre construct all the transactions, the
         -- startup time will be quite long.
-        forM_ allTrans addTx -- forM_  firstBatch addTx
+        -- outAddresses <- forM (ts++[t]) $ \k -> makePubKeyAddressAuxx (toPublic (fromMaybe (error "sendToAllGenesis: no keys") $ Just k))
+        outAddresses <- forM (ts ++ [t]) $ makePubKeyAddressAuxx . toPublic
+        -- forM_ allTrans addTx -- forM_  firstBatch addTx
+        zipWithM_ addTx allTrans outAddresses
         -- Send transactions while concurrently writing the TPS numbers every
         -- slot duration. The 'writeTPS' action takes care to *always* write
         -- after every slot duration, even if it is killed, so as to
@@ -182,32 +209,13 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         --
         -- While we're sending, we're constructing the second batch of
         -- transactions.
-        logInfo "First batch first time started sending."
+        -- prepareTxs duration
         void $
             -- concurrently (forM_ secondBatch addTx) $
+            -- concurrently (prepareTxs duration) $
             concurrently writeTPS (sendTxsConcurrently duration)
-        logInfo "First batch first time finished sending."
-        logInfo "Trying send starts."
-        (atomically $ tryReadTQueue txQueue') >>= \case
-            Just (tx, txOut1') -> do
-                outAddr' <- makePubKeyAddressAuxx (toPublic (fromMaybe (error "sendToAllGenesis: no keys") $ Just (keysToSend !! 1)))
-                let txInp = TxInUtxo (hash (taTx tx)) 0
-                    utxo' = M.fromList [(txInp, TxOutAux txOut1')]
-                    Just firstsKey = head keysToSend
-                    txOut2 = TxOut {
-                        txOutAddress = outAddr',
-                        txOutValue = mkCoin 1
-                        }
-                    txOuts2 = TxOutAux txOut2 :| []
-                logInfo $ "Utxo': " <> show utxo'
-                logInfo $ "txOuts2: " <> show txOuts2
-                etx' <- createTx mempty utxo' (fakeSigner firstsKey) txOuts2 (toPublic firstsKey)
-                case etx' of
-                    Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
-                    Right (tx', _) -> atomically $ writeTQueue txQueue (tx', txOuts)
-                sendTxs 1
-                logInfo "Trying send finished."
-            Nothing -> logInfo "No more transactions in the queue2."
+        prepareTxs duration
+        sendTxs 1
 
 ----------------------------------------------------------------------------
 -- Casual sending
