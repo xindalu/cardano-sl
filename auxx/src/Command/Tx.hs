@@ -124,11 +124,11 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                 case etx of
                     Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
                     Right (tx, txOut1new) -> do
-                        logInfo $ "Utxo: " <> show utxo
-                        logInfo $ "txOuts: " <> show txOuts
-                        logInfo $ "selfAddr: " <> show selfAddr
-                        logInfo $ "outAddr: " <> show outAddr
-                        logInfo $ "txOut1new: " <> show txOut1new
+                        -- logInfo $ "Utxo: " <> show utxo
+                        -- logInfo $ "txOuts: " <> show txOuts
+                        -- logInfo $ "selfAddr: " <> show selfAddr
+                        -- logInfo $ "outAddr: " <> show outAddr
+                        -- logInfo $ "txOut1new: " <> show txOut1new
                         -- see if txOut1new can be used
                         let txOut1' = TxOut {
                                 txOutAddress = selfAddr,  -- better (.) ??
@@ -187,18 +187,18 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                                 txOutValue = mkCoin 1
                                 }
                             txOuts2 = TxOutAux txOut2 :| []
-                        logInfo $ "Utxo': " <> show utxo'
-                        logInfo $ "txOuts2: " <> show txOuts2
-                        selfAddr <- makePubKeyAddressAuxx $ toPublic sender
-                        logInfo $ "selfAddr: " <> show selfAddr
-                        logInfo $ "receiver: " <> show receiver
+                        -- logInfo $ "Utxo': " <> show utxo'
+                        -- logInfo $ "txOuts2: " <> show txOuts2
+                        -- selfAddr <- makePubKeyAddressAuxx $ toPublic sender
+                        -- logInfo $ "selfAddr: " <> show selfAddr
+                        -- logInfo $ "receiver: " <> show receiver
                         etx' <- createTx mempty utxo' (fakeSigner sender) txOuts2 (toPublic sender)
                         case etx' of
                             Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
                             Right (tx', _) -> atomically $ writeTQueue txQueue tx'
                         -- sendTxs 1 addition to prepare another if there are not adequate
                         -- with the same sender and receiver just writing in txQueue'
-                        logInfo "Trying send finished."
+                        -- logInfo "Trying send finished."
                         prepareTxs $ n - 1
                     Nothing -> logInfo "No more transactions in the queue2."
 
@@ -220,12 +220,12 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         -- While we're sending, we're constructing the second batch of
         -- transactions.
         -- prepareTxs duration
+        prepareTxs nTrans
         void $
             -- concurrently (forM_ secondBatch addTx) $
             -- concurrently (prepareTxs duration) $
-            concurrently writeTPS (sendTxsConcurrently duration)
-        prepareTxs nTrans
-        sendTxs nTrans
+            concurrently writeTPS (sendTxsConcurrently (2*duration))
+        -- sendTxs nTrans
 
 ----------------------------------------------------------------------------
 -- Casual sending
