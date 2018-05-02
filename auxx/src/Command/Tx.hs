@@ -125,6 +125,9 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                     Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
                     Right (tx, txOut1new) -> do
                         logInfo $ "Utxo: " <> show utxo
+                        logInfo $ "txOuts: " <> show txOuts
+                        logInfo $ "selfAddr: " <> show selfAddr
+                        logInfo $ "outAddr: " <> show outAddr
                         logInfo $ "txOut1new: " <> show txOut1new
                         -- see if txOut1new can be used
                         let txOut1' = TxOut {
@@ -186,6 +189,9 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                             txOuts2 = TxOutAux txOut2 :| []
                         logInfo $ "Utxo': " <> show utxo'
                         logInfo $ "txOuts2: " <> show txOuts2
+                        selfAddr <- makePubKeyAddressAuxx $ toPublic sender
+                        logInfo $ "selfAddr: " <> show selfAddr
+                        logInfo $ "receiver: " <> show receiver
                         etx' <- createTx mempty utxo' (fakeSigner sender) txOuts2 (toPublic sender)
                         case etx' of
                             Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
@@ -193,6 +199,7 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                         -- sendTxs 1 addition to prepare another if there are not adequate
                         -- with the same sender and receiver just writing in txQueue'
                         logInfo "Trying send finished."
+                        prepareTxs $ n - 1
                     Nothing -> logInfo "No more transactions in the queue2."
 
             sendTxsConcurrently n = void $ forConcurrently [1..conc] (const (sendTxs n))
@@ -201,8 +208,8 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         -- rates. If we pre construct all the transactions, the
         -- startup time will be quite long.
         -- outAddresses <- forM (ts++[t]) $ \k -> makePubKeyAddressAuxx (toPublic (fromMaybe (error "sendToAllGenesis: no keys") $ Just k))
-        logInfo $ "allTrans:" <> show allTrans
-        outAddresses <- forM (ts ++ [t]) $ makePubKeyAddressAuxx . toPublic
+        logInfo $ "length allTrans:" <> (show (length allTrans))
+        outAddresses <- forM (ts++[t]) $ makePubKeyAddressAuxx . toPublic
         -- forM_ allTrans addTx -- forM_  firstBatch addTx
         zipWithM_ addTx allTrans outAddresses
         -- Send transactions while concurrently writing the TPS numbers every
@@ -217,8 +224,8 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
             -- concurrently (forM_ secondBatch addTx) $
             -- concurrently (prepareTxs duration) $
             concurrently writeTPS (sendTxsConcurrently duration)
-        prepareTxs duration
-        sendTxs 1
+        prepareTxs nTrans
+        sendTxs nTrans
 
 ----------------------------------------------------------------------------
 -- Casual sending
