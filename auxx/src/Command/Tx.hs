@@ -112,9 +112,10 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         -- construct a transaction, and add it to the queue
         let addTx fromKey outAddr = do
                 -- construct transaction output
+                selfAddr <- makePubKeyAddressAuxx $ toPublic fromKey
                 let val1 = 1
                     txOut1 = TxOut {
-                        txOutAddress = outAddr,
+                        txOutAddress = selfAddr,
                         txOutValue = mkCoin val1
                         }
                     txOuts = TxOutAux txOut1 :| []
@@ -125,8 +126,9 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                     Right (tx, txOut1new) -> do
                         logInfo $ "Utxo: " <> show utxo
                         logInfo $ "txOut1new: " <> show txOut1new
+                        -- see if txOut1new can be used
                         let txOut1' = TxOut {
-                                txOutAddress = outAddr,  -- better (.) ??
+                                txOutAddress = selfAddr,  -- better (.) ??
                                 txOutValue = mkCoin $ (getCoin $ txOutValue $ NE.head txOut1new) - val1 -- 636428571 -- txout1new - 1
                                 }
                         atomically $ writeTQueue txQueue tx
@@ -183,7 +185,7 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                                 }
                             txOuts2 = TxOutAux txOut2 :| []
                         logInfo $ "Utxo': " <> show utxo'
-                        logInfo $ "txOuts2: " <> show txOut2
+                        logInfo $ "txOuts2: " <> show txOuts2
                         etx' <- createTx mempty utxo' (fakeSigner sender) txOuts2 (toPublic sender)
                         case etx' of
                             Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
@@ -199,6 +201,7 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         -- rates. If we pre construct all the transactions, the
         -- startup time will be quite long.
         -- outAddresses <- forM (ts++[t]) $ \k -> makePubKeyAddressAuxx (toPublic (fromMaybe (error "sendToAllGenesis: no keys") $ Just k))
+        logInfo $ "allTrans:" <> show allTrans
         outAddresses <- forM (ts ++ [t]) $ makePubKeyAddressAuxx . toPublic
         -- forM_ allTrans addTx -- forM_  firstBatch addTx
         zipWithM_ addTx allTrans outAddresses
