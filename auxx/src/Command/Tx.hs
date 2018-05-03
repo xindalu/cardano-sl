@@ -129,7 +129,8 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                         -- logInfo $ "selfAddr: " <> show selfAddr
                         -- logInfo $ "outAddr: " <> show outAddr
                         -- logInfo $ "txOut1new: " <> show txOut1new
-                        -- see if txOut1new can be used
+                        -- see if txOut1new can be used. It can be used if we take
+                        -- the head of txOut1new and reduce its txOutValue by 1.
                         let txOut1' = TxOut {
                                 txOutAddress = selfAddr,  -- better (.) ??
                                 txOutValue = mkCoin $ (getCoin $ txOutValue $ NE.head txOut1new) - val1 -- 636428571 -- txout1new - 1
@@ -179,7 +180,7 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
             prepareTxs n --remainder
                 | n <= 0 = return ()
                 | otherwise = (atomically $ tryReadTQueue txQueue') >>= \case
-                    Just (tx, txOut1', sender, receiver) -> do
+                    Just (tx, txOut1', senderKey, receiver) -> do
                         let txInp = TxInUtxo (hash (taTx tx)) 0
                             utxo' = M.fromList [(txInp, TxOutAux txOut1')]
                             txOut2 = TxOut {
@@ -189,13 +190,21 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                             txOuts2 = TxOutAux txOut2 :| []
                         -- logInfo $ "Utxo': " <> show utxo'
                         -- logInfo $ "txOuts2: " <> show txOuts2
-                        -- selfAddr <- makePubKeyAddressAuxx $ toPublic sender
+                        selfAddr <- makePubKeyAddressAuxx $ toPublic senderKey
                         -- logInfo $ "selfAddr: " <> show selfAddr
                         -- logInfo $ "receiver: " <> show receiver
-                        etx' <- createTx mempty utxo' (fakeSigner sender) txOuts2 (toPublic sender)
+                        etx' <- createTx mempty utxo' (fakeSigner senderKey) txOuts2 (toPublic senderKey)
                         case etx' of
                             Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
-                            Right (tx', _) -> atomically $ writeTQueue txQueue tx'
+                            Right (tx', txOut1new') -> do
+                                let txOut1'' = TxOut {
+                                    txOutAddress = selfAddr,
+                                    txOutValue = mkCoin $ (getCoin $ txOutValue $ NE.head txOut1new') - 1
+                                    }
+                                logInfo $ "txOut1new': " <> show txOut1new'
+                                logInfo $ "txOut1'': " <> show txOut1''
+                                atomically $ writeTQueue txQueue tx'
+                                atomically $ writeTQueue txQueue' (tx', txOut1'', senderKey, receiver)
                         -- sendTxs 1 addition to prepare another if there are not adequate
                         -- with the same sender and receiver just writing in txQueue'
                         -- logInfo "Trying send finished."
@@ -220,11 +229,11 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         -- While we're sending, we're constructing the second batch of
         -- transactions.
         -- prepareTxs duration
-        prepareTxs nTrans
+        prepareTxs $ 2*nTrans
         void $
             -- concurrently (forM_ secondBatch addTx) $
             -- concurrently (prepareTxs duration) $
-            concurrently writeTPS (sendTxsConcurrently (2*duration))
+            concurrently writeTPS (sendTxsConcurrently (3*duration))
         -- sendTxs nTrans
 
 ----------------------------------------------------------------------------
