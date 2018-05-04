@@ -218,7 +218,7 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         -- startup time will be quite long.
         -- outAddresses <- forM (ts++[t]) $ \k -> makePubKeyAddressAuxx (toPublic (fromMaybe (error "sendToAllGenesis: no keys") $ Just k))
         logInfo $ "length allTrans:" <> (show (length allTrans))
-        outAddresses <- forM (ts++[t]) $ makePubKeyAddressAuxx . toPublic
+        outAddresses <- forM allTrans $ makePubKeyAddressAuxx . toPublic
         -- forM_ allTrans addTx -- forM_  firstBatch addTx
         zipWithM_ addTx allTrans outAddresses
         -- Send transactions while concurrently writing the TPS numbers every
@@ -229,7 +229,7 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         -- While we're sending, we're constructing the second batch of
         -- transactions.
         -- prepareTxs duration
-        prepareTxs $ 2*nTrans
+        prepareTxs $ 1*nTrans
         void $
             -- concurrently (forM_ secondBatch addTx) $
             -- concurrently (prepareTxs duration) $
