@@ -15,6 +15,8 @@ module Cardano.Wallet.Kernel.DB.HdWallet (
   , HdRoot(..)
   , HdAccount(..)
   , HdAddress(..)
+    -- ** Initialiser
+  , initHdWallets
     -- ** Lenses
   , hdWalletsRoots
   , hdWalletsAccounts
@@ -319,6 +321,9 @@ data HdWallets = HdWallets {
 
 deriveSafeCopy 1 'base ''HdWallets
 makeLenses ''HdWallets
+
+initHdWallets :: HdWallets
+initHdWallets = HdWallets emptyIxSet emptyIxSet emptyIxSet
 
 zoomHdRootId :: forall e a.
                 (UnknownHdRoot -> e)

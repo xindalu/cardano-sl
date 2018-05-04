@@ -23,6 +23,7 @@ module Cardano.Wallet.Kernel (
   , totalBalance
   , stateUtxo
   , stateUtxoBalance
+  , wallets'
     -- * Active wallet
   , ActiveWallet -- opaque
   , bracketActiveWallet
@@ -33,41 +34,39 @@ module Cardano.Wallet.Kernel (
 import           Universum hiding (State)
 
 import           Control.Lens.TH
-import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
-import           Data.Maybe (fromJust)
+import           Data.Maybe (fromJust) -- TODO remove with refactor to AdicState Wallet
 import qualified Data.Set as Set
 
 import           System.Wlog (Severity (..))
 
+import           Data.Acid (AcidState)
+import           Data.Acid.Memory (openMemoryState)
+
 import           Cardano.Wallet.Kernel.DB.Resolved (ResolvedBlock)
 import           Cardano.Wallet.Kernel.Diffusion (WalletDiffusion (..))
-import           Cardano.Wallet.Kernel.PrefilterTx (PrefilteredBlock (..), ourUtxo, prefilterBlock)
+import           Cardano.Wallet.Kernel.PrefilterTx (ourUtxo, prefilterBlock)
 import           Cardano.Wallet.Kernel.Types (txUtxo)
 
-import           Pos.Core (HasConfiguration, TxAux, sumCoins)
-import           Pos.Core.Txp (Tx (..), TxAux (..), TxId, TxIn (..), TxOut (..), TxOutAux (..))
+import           Cardano.Wallet.Kernel.DB.AcidState (DB, defDB)
+import qualified Cardano.Wallet.Kernel.DB.Spec.Update as Spec
+import qualified Cardano.Wallet.Kernel.DB.Spec.Util as Spec
+
+import           Pos.Core (HasConfiguration, TxAux (..))
 import           Pos.Crypto (EncryptedSecretKey, hash)
 import           Pos.Txp (Utxo)
 import           Pos.Util.Chrono (NE, OldestFirst)
-
--- import           Cardano.Wallet.Orphans ()
+import           Cardano.Wallet.Kernel.PrefilterTx (PrefilteredBlock (..))
 
 {-------------------------------------------------------------------------------
   Wallet with State
 -------------------------------------------------------------------------------}
 
--- | Pending
-type Pending = Map TxId TxAux
-
--- | Utxo Balance
-type Balance = Integer
-
 -- | Wallet State
 data State = State {
       _stateUtxo        :: Utxo
-    , _statePending     :: Pending
-    , _stateUtxoBalance :: Balance
+    , _statePending     :: Spec.PendingTxs
+    , _stateUtxoBalance :: Spec.Balance
     }
 
 -- | Wallet
@@ -125,7 +124,8 @@ makeLenses ''State
 data PassiveWallet = PassiveWallet {
       -- | Send log message
       _walletLogMessage :: Severity -> Text -> IO ()
-    , _wallets          :: MVar Wallets
+    , _wallets          :: MVar Wallets -- TODO remove
+    , _wallets'          :: AcidState DB
     }
 
 makeLenses ''PassiveWallet
@@ -141,13 +141,50 @@ makeLenses ''PassiveWallet
 bracketPassiveWallet :: (MonadMask m, MonadIO m)
                      => (Severity -> Text -> IO ())
                      -> (PassiveWallet -> m a) -> m a
-bracketPassiveWallet _walletLogMessage =
-    bracket
-      (liftIO $ initPassiveWallet _walletLogMessage)
-      (\_ -> return ())
+bracketPassiveWallet _walletLogMessage f =
+    bracket (liftIO $ openMemoryState defDB)
+            (\_ -> return ())
+            (\db ->
+                bracket
+                  (liftIO $ initPassiveWallet _walletLogMessage db)
+                  (\_ -> return ())
+                  f)
 
 {-------------------------------------------------------------------------------
-  Passive wallet - DB
+TODO move to Spec.READ/UTIL
+-------------------------------------------------------------------------------}
+
+available :: PassiveWallet -> WalletId -> IO Utxo
+available pw wid = do
+    State utxo pending _ <- getWalletState pw wid
+
+    return $ Spec.utxoRemoveInputs utxo (Spec.txIns pending)
+
+change :: PassiveWallet -> WalletId -> IO Utxo
+change pw wid = do
+    State _ pending _ <- getWalletState pw wid
+    let pendingUtxo = Spec.unionTxOuts $ map (txUtxo . taTx) $ Map.elems pending
+
+    w <- fromJust <$> findWallet pw wid
+    return $ ourUtxo (w ^. walletESK) pendingUtxo
+
+_total :: PassiveWallet -> WalletId -> IO Utxo
+_total pw wid = Map.union <$> available pw wid <*> change pw wid
+
+availableBalance :: PassiveWallet -> WalletId -> IO Spec.Balance
+availableBalance pw wid = do
+    State utxo pending utxoBalance <- getWalletState pw wid
+    let balanceDelta = Spec.balance (Spec.utxoRestrictToInputs utxo (Spec.txIns pending))
+    return $ utxoBalance - balanceDelta
+
+totalBalance :: PassiveWallet -> WalletId -> IO Spec.Balance
+totalBalance pw wid = do
+    availableBalance' <- availableBalance pw wid
+    changeBalance' <- Spec.balance <$> change pw wid
+    return $ availableBalance' + changeBalance'
+
+{-------------------------------------------------------------------------------
+  Passive wallet - tmp DB -- TODO remove
 -------------------------------------------------------------------------------}
 
 getWallets :: PassiveWallet -> IO Wallets
@@ -171,8 +208,8 @@ insertWallet pw wid w
 -- | Lookup Wallet in PassiveWallet using WalletId
 findWallet :: PassiveWallet -> WalletId -> IO (Maybe Wallet)
 findWallet pw wid = do
-    wallets' <- getWallets pw
-    return $ Map.lookup wid wallets'
+    wallets_ <- getWallets pw
+    return $ Map.lookup wid wallets_
 
 -- | Return the wallet's current State
 getWalletState :: PassiveWallet -> WalletId -> IO State
@@ -183,7 +220,7 @@ getWalletUtxo :: PassiveWallet -> WalletId -> IO Utxo
 getWalletUtxo pw wid = _stateUtxo <$> getWalletState pw wid
 
 -- | Return the wallet's current Pending
-getWalletPending :: PassiveWallet -> WalletId -> IO Pending
+getWalletPending :: PassiveWallet -> WalletId -> IO Spec.PendingTxs
 getWalletPending pw wid = _statePending <$> getWalletState pw wid
 
 -- | Modify Wallet State with given modifier function
@@ -215,10 +252,11 @@ insertWalletPending ActiveWallet{..} wid tx
 
 -- | Initialise Passive Wallet with empty Wallets collection
 initPassiveWallet :: (Severity -> Text -> IO ())
+                  -> AcidState DB
                   -> IO PassiveWallet
-initPassiveWallet logMessage = do
+initPassiveWallet logMessage db = do
     ws <- Universum.newMVar Map.empty
-    return $ PassiveWallet logMessage ws
+    return $ PassiveWallet logMessage ws db
 
 -- | Initialise Wallet with ESK and empty State
 initWalletHdRnd :: EncryptedSecretKey -> Utxo -> IO Wallet
@@ -229,7 +267,9 @@ initWalletHdRnd esk utxo = do
         initState :: State
         initState = State { _stateUtxo = utxo
                           , _statePending = Map.empty
-                          , _stateUtxoBalance = balance utxo
+                          -- TODO Prefilter transactions (currently used only in tests,
+                          --      which does prefiltering)
+                          , _stateUtxoBalance = Spec.balance utxo
                           }
 
 -- | Add a new WalletHdRnd, with given ESK, to the PassiveWallet collection of
@@ -276,8 +316,8 @@ applyBlock' pw b wid = do
     w <- fromJust <$> findWallet pw wid
 
     let prefBlock              = prefilterBlock (w ^. walletESK) b
-        (utxo'', balanceDelta) = updateUtxo    prefBlock utxo'
-        pending''              = updatePending prefBlock pending'
+        (utxo'', balanceDelta) = updateUtxo_    prefBlock utxo'
+        pending''              = Spec.updatePending prefBlock pending'
         balance''              = balance' + balanceDelta
 
     updateWalletState pw wid $ State utxo'' pending'' balance''
@@ -289,80 +329,14 @@ applyBlocks :: HasConfiguration
               -> IO ()
 applyBlocks pw = mapM_ (applyBlock pw)
 
-updateUtxo :: PrefilteredBlock -> Utxo -> (Utxo, Balance)
-updateUtxo PrefilteredBlock{..} currentUtxo =
+updateUtxo_ :: PrefilteredBlock -> Utxo -> (Utxo, Spec.Balance)
+updateUtxo_ PrefilteredBlock{..} currentUtxo =
       (utxo', balanceDelta)
     where
         unionUtxo = Map.union pfbOutputs currentUtxo
-        utxo' = utxoRemoveInputs unionUtxo pfbInputs
-        unionUtxoRestricted  = utxoRestrictToInputs unionUtxo pfbInputs
-        balanceDelta = balance pfbOutputs - balance unionUtxoRestricted
-
-updatePending :: PrefilteredBlock -> Pending -> Pending
-updatePending PrefilteredBlock{..} =
-    Map.filter (\t -> disjoint (txAuxInputSet t) pfbInputs)
-
-txAuxInputSet :: TxAux -> Set TxIn
-txAuxInputSet = Set.fromList . NE.toList . _txInputs . taTx
-
-withoutKeys :: Ord k => Map k a -> Set k -> Map k a
-m `withoutKeys` s = m `Map.difference` Map.fromSet (const ()) s
-
-restrictKeys :: Ord k => Map k a -> Set k -> Map k a
-m `restrictKeys` s = m `Map.intersection` Map.fromSet (const ()) s
-
-disjoint :: Ord a => Set a -> Set a -> Bool
-disjoint a b = Set.null (a `Set.intersection` b)
-
-unionTxOuts :: [Utxo] -> Utxo
-unionTxOuts = Map.unions
-
-utxoRemoveInputs :: Utxo -> Set TxIn -> Utxo
-utxoRemoveInputs = withoutKeys
-
-utxoRestrictToInputs :: Utxo -> Set TxIn -> Utxo
-utxoRestrictToInputs = restrictKeys
-
-utxoInputs :: Utxo -> Set TxIn
-utxoInputs = Map.keysSet
-
-utxoOutputs :: Utxo -> [TxOut]
-utxoOutputs = map toaOut . Map.elems
-
-txIns' :: Pending -> Set TxIn
-txIns' = Set.fromList . concatMap (NE.toList . _txInputs . taTx) . Map.elems
-
-available :: PassiveWallet -> WalletId -> IO Utxo
-available pw wid = do
-    State utxo pending _ <- getWalletState pw wid
-
-    return $ utxoRemoveInputs utxo (txIns' pending)
-
-change :: PassiveWallet -> WalletId -> IO Utxo
-change pw wid = do
-    State _ pending _ <- getWalletState pw wid
-    let pendingUtxo = unionTxOuts $ map (txUtxo . taTx) $ Map.elems pending
-
-    w <- fromJust <$> findWallet pw wid
-    return $ ourUtxo (w ^. walletESK) pendingUtxo
-
-_total :: PassiveWallet -> WalletId -> IO Utxo
-_total pw wid = Map.union <$> available pw wid <*> change pw wid
-
-balance :: Utxo -> Balance
-balance = sumCoins . map txOutValue . utxoOutputs
-
-availableBalance :: PassiveWallet -> WalletId -> IO Balance
-availableBalance pw wid = do
-    State utxo pending utxoBalance <- getWalletState pw wid
-    let balanceDelta = balance (utxoRestrictToInputs utxo (txIns' pending))
-    return $ utxoBalance - balanceDelta
-
-totalBalance :: PassiveWallet -> WalletId -> IO Balance
-totalBalance pw wid = do
-    availableBalance' <- availableBalance pw wid
-    changeBalance' <- balance <$> change pw wid
-    return $ availableBalance' + changeBalance'
+        utxo' = Spec.utxoRemoveInputs unionUtxo pfbInputs
+        unionUtxoRestricted  = Spec.utxoRestrictToInputs unionUtxo pfbInputs
+        balanceDelta = Spec.balance pfbOutputs - Spec.balance unionUtxoRestricted
 
 {-------------------------------------------------------------------------------
   Active wallet
@@ -403,8 +377,8 @@ hasPending ActiveWallet{..} wid = do
 -- | Submit a new pending transaction
 newPending :: ActiveWallet -> WalletId -> TxAux -> IO Bool
 newPending activeWallet@ActiveWallet{..} wid tx = do
-    availableInputs <- utxoInputs <$> available walletPassive wid
+    availableInputs <- Spec.utxoInputs <$> available walletPassive wid
 
-    let isValid = txAuxInputSet tx `Set.isSubsetOf` availableInputs
+    let isValid = Spec.txAuxInputSet tx `Set.isSubsetOf` availableInputs
     when isValid $ insertWalletPending activeWallet wid tx
     return isValid

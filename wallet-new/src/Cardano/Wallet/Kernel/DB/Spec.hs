@@ -2,6 +2,8 @@
 module Cardano.Wallet.Kernel.DB.Spec (
     -- * Wallet state as mandated by the spec
     Pending(..)
+  , PendingTxs
+  , Balance
   , Checkpoint(..)
   , Checkpoints
     -- ** Lenses
@@ -35,9 +37,13 @@ import           Cardano.Wallet.Kernel.DB.BlockMeta
   Wallet state as mandated by the spec
 -------------------------------------------------------------------------------}
 
+type Balance = Integer
+
+type PendingTxs = Map Core.TxId Core.TxAux
+
 -- | Pending transactions
 data Pending = Pending {
-      _pendingTransactions :: InDb (Map Core.TxId Core.TxAux)
+      _pendingTransactions :: InDb PendingTxs
     }
 
 -- | Per-wallet state

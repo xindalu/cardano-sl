@@ -6,6 +6,7 @@ module Cardano.Wallet.Kernel.DB.AcidState (
     -- * Top-level database
     DB(..)
   , dbHdWallets
+  , defDB
     -- * Acid-state operations
     -- ** Snapshot
   , Snapshot(..)
@@ -36,13 +37,14 @@ import           Data.SafeCopy (base, deriveSafeCopy)
 import qualified Pos.Core as Core
 import           Pos.Util.Chrono (OldestFirst(..))
 
+import           Cardano.Wallet.Kernel.PrefilterTx (PrefilteredBlock)
+
 import           Cardano.Wallet.Kernel.DB.BlockMeta
 import           Cardano.Wallet.Kernel.DB.HdWallet
 import qualified Cardano.Wallet.Kernel.DB.HdWallet.Create as HD
 import qualified Cardano.Wallet.Kernel.DB.HdWallet.Delete as HD
 import qualified Cardano.Wallet.Kernel.DB.HdWallet.Update as HD
 import           Cardano.Wallet.Kernel.DB.InDb
-import           Cardano.Wallet.Kernel.DB.Resolved
 import           Cardano.Wallet.Kernel.DB.Spec
 import qualified Cardano.Wallet.Kernel.DB.Spec.Update as Spec
 import           Cardano.Wallet.Kernel.DB.Util.AcidState
@@ -68,6 +70,10 @@ data DB = DB {
 
 makeLenses ''DB
 deriveSafeCopy 1 'base ''DB
+
+-- | Default DB
+defDB :: DB
+defDB = DB initHdWallets
 
 {-------------------------------------------------------------------------------
   Wrap wallet spec
@@ -99,7 +105,7 @@ newPending accountId tx = runUpdate' . zoom dbHdWallets $
 -- NOTE: Calls to 'applyBlock' must be sequentialized by the caller
 -- (although concurrent calls to 'applyBlock' cannot interfere with each
 -- other, 'applyBlock' must be called in the right order.)
-applyBlock :: (ResolvedBlock, BlockMeta) -> Update DB ()
+applyBlock :: (PrefilteredBlock, BlockMeta) -> Update DB ()
 applyBlock block = runUpdateNoErrors $
     zoomAll (dbHdWallets . hdWalletsAccounts) $
       hdAccountCheckpoints %~ Spec.applyBlock block
@@ -111,7 +117,7 @@ applyBlock block = runUpdateNoErrors $
 -- TODO: We use a plain list here rather than 'OldestFirst' since the latter
 -- does not have a 'SafeCopy' instance.
 switchToFork :: Int
-             -> [(ResolvedBlock, BlockMeta)]
+             -> [(PrefilteredBlock, BlockMeta)]
              -> Update DB ()
 switchToFork n blocks = runUpdateNoErrors $
     zoomAll (dbHdWallets . hdWalletsAccounts) $
