@@ -57,10 +57,11 @@ import           Mode (MonadAuxxMode, makePubKeyAddressAuxx)
 
 -- | Parameters for 'SendToAllGenesis' command.
 data SendToAllGenesisParams = SendToAllGenesisParams
-    { stagpTxsPerThread :: !Int
-    , stagpConc         :: !Int
-    , stagpDelay        :: !Int
-    , stagpTpsSentFile  :: !FilePath
+    { stagpGenesisTxsPerThread :: !Int
+    , stagpTxsPerThread        :: !Int
+    , stagpConc                :: !Int
+    , stagpDelay               :: !Int
+    , stagpTpsSentFile         :: !FilePath
     } deriving (Show)
 
 -- | Count submitted transactions.
@@ -82,7 +83,7 @@ sendToAllGenesis
     => Diffusion m
     -> SendToAllGenesisParams
     -> m ()
-sendToAllGenesis diffusion (SendToAllGenesisParams txsPerThread conc delay_ tpsSentFile) = do
+sendToAllGenesis diffusion (SendToAllGenesisParams genesisTxsPerThread txsPerThread conc delay_ tpsSentFile) = do
     let genesisSlotDuration = fromIntegral (toMicroseconds $ bvdSlotDuration genesisBlockVersionData) `div` 1000000 :: Int
         keysToSend  = fromMaybe (error "Genesis secret keys are unknown") genesisSecretKeys
     tpsMVar <- newSharedAtomic $ TxCount 0 conc
@@ -141,8 +142,9 @@ sendToAllGenesis diffusion (SendToAllGenesisParams txsPerThread conc delay_ tpsS
                         -- with the same sender just writing in txQueue'
                         prepareTxs $ n - 1
                     Nothing -> logInfo "No more txOuts in the queue."
-        let nTrans = conc * txsPerThread
-            allTrans = take nTrans (drop startAt keysToSend)
+        let genesisTxs = conc * genesisTxsPerThread
+            nTxs   = conc * txsPerThread
+            allGenTxs = take genesisTxs (drop startAt keysToSend)
             -- every <slotDuration> seconds, write the number of sent transactions to a CSV file.
         let writeTPS :: m ()
             writeTPS = do
@@ -183,7 +185,7 @@ sendToAllGenesis diffusion (SendToAllGenesisParams txsPerThread conc delay_ tpsS
         -- we'll be CPU bound and will not achieve high transaction
         -- rates. If we pre construct all the transactions, the
         -- startup time will be quite long.
-        forM_ allTrans addTx
+        forM_ allGenTxs addTx
         -- Send transactions while concurrently writing the TPS numbers every
         -- slot duration. The 'writeTPS' action takes care to *always* write
         -- after every slot duration, even if it is killed, so as to
@@ -191,11 +193,12 @@ sendToAllGenesis diffusion (SendToAllGenesisParams txsPerThread conc delay_ tpsS
         --
         -- While we're sending, we're constructing the second batch of
         -- transactions.
-        -- TODO remove hardcoded numbers
-        prepareTxs $ 2*nTrans -- TODO run in parallel
+        prepareTxs $ nTxs - genesisTxs -- TODO run in parallel
+        -- TODO remove reduntant preparation not writing in txQueue'
+        -- TODO comments
         void $
             -- concurrently (forM_ secondBatch addTx) $
-            concurrently writeTPS (sendTxsConcurrently (3*txsPerThread))
+            concurrently writeTPS (sendTxsConcurrently txsPerThread)
 
 ----------------------------------------------------------------------------
 -- Casual sending
