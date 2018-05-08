@@ -193,11 +193,11 @@ sendToAllGenesis diffusion (SendToAllGenesisParams genesisTxsPerThread txsPerThr
         --
         -- While we're sending, we're constructing the second batch of
         -- transactions.
-        prepareTxs $ nTxs - genesisTxs -- TODO run in parallel
+        -- prepareTxs $ nTxs - genesisTxs -- TODO run in parallel
         -- TODO remove reduntant preparation not writing in txQueue'
         -- TODO comments
         void $
-            -- concurrently (forM_ secondBatch addTx) $
+            concurrently (prepareTxs $ nTxs - genesisTxs) $
             concurrently writeTPS (sendTxsConcurrently txsPerThread)
 
 ----------------------------------------------------------------------------
