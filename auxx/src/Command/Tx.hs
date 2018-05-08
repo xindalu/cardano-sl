@@ -41,7 +41,8 @@ import           Pos.Client.Txp.Util (createTx)
 import           Pos.Core (BlockVersionData (bvdSlotDuration), IsBootstrapEraAddr (..),
                            Timestamp (..), deriveFirstHDAddress, getCoin, makePubKeyAddress, mkCoin)
 import           Pos.Core.Configuration (genesisBlockVersionData, genesisSecretKeys)
-import           Pos.Core.Txp (TxAux (..), TxIn (TxInUtxo), TxOut (..), TxOutAux (..), txaF)
+import           Pos.Core.Txp (Tx (_txOutputs), TxAux (..), TxIn (TxInUtxo), TxOut (..),
+                               TxOutAux (..), txaF)
 import           Pos.Crypto (EncryptedSecretKey, emptyPassphrase, encToPublic, fakeSigner, hash,
                              safeToPublic, toPublic, withSafeSigners)
 import           Pos.Diffusion.Types (Diffusion (..))
@@ -101,7 +102,7 @@ sendToAllGenesis diffusion (SendToAllGenesisParams genesisTxsPerThread txsPerThr
         logInfo $ sformat ("Found "%shown%" keys in the genesis block.") (length keysToSend)
         startAtTxt <- liftIO $ lookupEnv "AUXX_START_AT"
         let startAt = fromMaybe 0 . readMaybe . fromMaybe "" $ startAtTxt :: Int
-                -- construct a transaction, and add it to the queue
+        -- construct a transaction, and add it to the queue
         let addTx secretKey = do
                 let signer = fakeSigner secretKey
                     publicKey = toPublic secretKey
@@ -119,16 +120,20 @@ sendToAllGenesis diffusion (SendToAllGenesisParams genesisTxsPerThread txsPerThr
                     Right (tx, _) -> do
                         atomically $ writeTQueue txQueue tx
                         atomically $ writeTQueue txQueue' (tx, txOut1, secretKey)
-            -- construct transactions whose inputs does not belong in genesis block
+            -- construct transactions whose inputs does not belong in genesis
+            -- block. Send as many coins as were received in the previous round
+            -- back to yourself.
             prepareTxs :: Int -> m ()
             prepareTxs n
                 | n <= 0 = return ()
                 | otherwise = (atomically $ tryReadTQueue txQueue') >>= \case
                     Just (tx, txOut1', senderKey) -> do
-                        -- TODO see if txOut1' can be viewd from _txOutputs tx
+                        -- TODO see if txOut1' can be viewed from _txOutputs tx
                         let txInp = TxInUtxo (hash (taTx tx)) 0
                             utxo' = M.fromList [(txInp, TxOutAux txOut1')]
                             txOuts2 = TxOutAux txOut1' :| []
+                        logInfo $ "txOut1'      ::: " <> show txOut1'
+                        logInfo $ "_txOutputs tx::: " <> show (_txOutputs (taTx tx))
                         selfAddr <- makePubKeyAddressAuxx $ toPublic senderKey
                         etx' <- createTx mempty utxo' (fakeSigner senderKey) txOuts2 (toPublic senderKey)
                         case etx' of
@@ -181,8 +186,8 @@ sendToAllGenesis diffusion (SendToAllGenesisParams genesisTxsPerThread txsPerThr
                           sendTxs 0
 
             sendTxsConcurrently n = void $ forConcurrently [1..conc] (const (sendTxs n))
-        -- pre construct the transactions. Otherwise,
-        -- we'll be CPU bound and will not achieve high transaction
+        -- pre construct the transactions that send funds from genesis.
+        -- Otherwise, we'll be CPU bound and will not achieve high transaction
         -- rates. If we pre construct all the transactions, the
         -- startup time will be quite long.
         forM_ allGenTxs addTx
@@ -191,11 +196,10 @@ sendToAllGenesis diffusion (SendToAllGenesisParams genesisTxsPerThread txsPerThr
         -- after every slot duration, even if it is killed, so as to
         -- guarantee that we don't miss any numbers.
         --
-        -- While we're sending, we're constructing the second batch of
-        -- transactions.
+        -- While we're sending, we're constructing the transactions
+        -- that don't send coins from genesis.
         -- prepareTxs $ nTxs - genesisTxs -- TODO run in parallel
         -- TODO remove reduntant preparation not writing in txQueue'
-        -- TODO comments
         void $
             concurrently (prepareTxs $ nTxs - genesisTxs) $
             concurrently writeTPS (sendTxsConcurrently txsPerThread)
