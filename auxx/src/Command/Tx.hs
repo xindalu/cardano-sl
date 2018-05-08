@@ -14,7 +14,7 @@ import           Universum
 
 import           Control.Concurrent.STM.TQueue (newTQueue, tryReadTQueue, writeTQueue)
 import           Control.Exception.Safe (Exception (..), try)
--- import           Control.Monad (forM, zipWithM_)
+import           Control.Monad (when)
 import           Control.Monad.Except (runExceptT)
 import           Data.Aeson (eitherDecodeStrict)
 import qualified Data.ByteString as BS
@@ -96,9 +96,11 @@ sendToAllGenesis diffusion (SendToAllGenesisParams genesisTxsPerThread txsPerThr
                                                    , "startTime=" <> startTime
                                                    , "delay=" <> show delay_ ]
         liftIO $ T.hPutStrLn h "time,txCount,txType"
-        txQueue  <- atomically $ newTQueue
-        txQueue' <- atomically $ newTQueue
-        -- prepare a queue with all transactions
+        -- prepare a queue for the transactions to be send
+        -- and a queue with necessary data for the creation of txs whose inputs
+        -- don't belong in genesis block
+        txQueue            <- atomically $ newTQueue
+        txPreparationQueue <- atomically $ newTQueue
         logInfo $ sformat ("Found "%shown%" keys in the genesis block.") (length keysToSend)
         startAtTxt <- liftIO $ lookupEnv "AUXX_START_AT"
         let startAt = fromMaybe 0 . readMaybe . fromMaybe "" $ startAtTxt :: Int
@@ -119,37 +121,33 @@ sendToAllGenesis diffusion (SendToAllGenesisParams genesisTxsPerThread txsPerThr
                     Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
                     Right (tx, _) -> do
                         atomically $ writeTQueue txQueue tx
-                        atomically $ writeTQueue txQueue' (tx, txOut1, secretKey)
+                        atomically $ writeTQueue txPreparationQueue (tx, txOut1, secretKey)
+        let genesisTxs  = conc * genesisTxsPerThread
+            nTxs        = conc * txsPerThread
+            genesisKeys = take genesisTxs (drop startAt keysToSend)
             -- construct transactions whose inputs does not belong in genesis
             -- block. Send as many coins as were received in the previous round
             -- back to yourself.
             prepareTxs :: Int -> m ()
             prepareTxs n
                 | n <= 0 = return ()
-                | otherwise = (atomically $ tryReadTQueue txQueue') >>= \case
+                | otherwise = (atomically $ tryReadTQueue txPreparationQueue) >>= \case
                     Just (tx, txOut1', senderKey) -> do
-                        -- TODO see if txOut1' can be viewed from _txOutputs tx
                         let txInp = TxInUtxo (hash (taTx tx)) 0
                             utxo' = M.fromList [(txInp, TxOutAux txOut1')]
                             txOuts2 = TxOutAux txOut1' :| []
-                        logInfo $ "txOut1'      ::: " <> show txOut1'
-                        logInfo $ "_txOutputs tx::: " <> show (_txOutputs (taTx tx))
-                        selfAddr <- makePubKeyAddressAuxx $ toPublic senderKey
                         etx' <- createTx mempty utxo' (fakeSigner senderKey) txOuts2 (toPublic senderKey)
                         case etx' of
                             Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
-                            Right (tx', txOut1new') -> do
-                                logInfo $ "txOut1new': " <> show txOut1new'
-                                logInfo $ "txOut1': " <> show txOut1'
+                            Right (tx', _) -> do
                                 atomically $ writeTQueue txQueue tx'
-                                atomically $ writeTQueue txQueue' (tx', txOut1', senderKey)
-                        -- addition to prepare another if there are not adequate
-                        -- with the same sender just writing in txQueue'
+                                -- add to preparation queue one more time data
+                                -- necessary to construct one more transaction
+                                -- with the same sender
+                                when (n > genesisTxs) $
+                                    atomically $ writeTQueue txPreparationQueue (tx', txOut1', senderKey)
                         prepareTxs $ n - 1
                     Nothing -> logInfo "No more txOuts in the queue."
-        let genesisTxs = conc * genesisTxsPerThread
-            nTxs   = conc * txsPerThread
-            allGenTxs = take genesisTxs (drop startAt keysToSend)
             -- every <slotDuration> seconds, write the number of sent transactions to a CSV file.
         let writeTPS :: m ()
             writeTPS = do
@@ -190,16 +188,15 @@ sendToAllGenesis diffusion (SendToAllGenesisParams genesisTxsPerThread txsPerThr
         -- Otherwise, we'll be CPU bound and will not achieve high transaction
         -- rates. If we pre construct all the transactions, the
         -- startup time will be quite long.
-        forM_ allGenTxs addTx
+        forM_ genesisKeys addTx
         -- Send transactions while concurrently writing the TPS numbers every
         -- slot duration. The 'writeTPS' action takes care to *always* write
         -- after every slot duration, even if it is killed, so as to
         -- guarantee that we don't miss any numbers.
         --
         -- While we're sending, we're constructing the transactions
-        -- that don't send coins from genesis.
-        -- prepareTxs $ nTxs - genesisTxs -- TODO run in parallel
-        -- TODO remove reduntant preparation not writing in txQueue'
+        -- that don't send coins from genesis and send 1 coin back to
+        -- themselves over and over.
         void $
             concurrently (prepareTxs $ nTxs - genesisTxs) $
             concurrently writeTPS (sendTxsConcurrently txsPerThread)
