@@ -38,9 +38,9 @@ import           Pos.Block.Slog (BypassSecurityCheck (..), MonadSlogApply, Monad
                                  ShouldCallBListener, slogApplyBlocks, slogRollbackBlocks)
 import           Pos.Block.Types (Blund, Undo (undoDlg, undoTx, undoUS))
 import           Pos.Core (ComponentBlock (..), IsGenesisHeader, epochIndexL, HasGeneratedSecrets,
-                           gbHeader, headerHash, mainBlockDlgPayload, mainBlockSscPayload, HasGenesisData,
+                           gbHeader, headerHash, mainBlockDlgPayload, mainBlockSscPayload,
                            mainBlockTxPayload, mainBlockUpdatePayload, HasGenesisBlockVersionData,
-                           HasGenesisData, HasProtocolConstants)
+                           HasGenesisData, HasGenesisHash, HasProtocolConstants)
 import           Pos.Core.Block (Block, GenesisBlock, MainBlock)
 import           Pos.DB (MonadDB, MonadDBRead, MonadGState, SomeBatchOp (..))
 import qualified Pos.DB.GState.Common as GS (writeBatchGState)
@@ -145,7 +145,14 @@ normalizeMempool = do
 --
 -- Invariant: all blocks have the same epoch.
 applyBlocksUnsafe
-    :: forall ctx m . (MonadBlockApply ctx m, HasGeneratedSecrets, HasGenesisData, HasGenesisBlockVersionData, HasProtocolConstants)
+    :: forall ctx m.
+       ( MonadBlockApply ctx m
+       , HasGeneratedSecrets
+       , HasGenesisBlockVersionData
+       , HasGenesisData
+       , HasGenesisHash
+       , HasProtocolConstants
+       )
     => ShouldCallBListener
     -> OldestFirst NE Blund
     -> Maybe PollModifier
@@ -176,7 +183,14 @@ applyBlocksUnsafe scb blunds pModifier = do
         spanSafe ((==) `on` view (_1 . epochIndexL)) $ getOldestFirst blunds
 
 applyBlocksDbUnsafeDo
-    :: forall ctx m . (MonadBlockApply ctx m, HasGeneratedSecrets, HasGenesisData, HasGenesisBlockVersionData, HasProtocolConstants)
+    :: forall ctx m.
+       ( MonadBlockApply ctx m
+       , HasGeneratedSecrets
+       , HasGenesisData
+       , HasGenesisHash
+       , HasGenesisBlockVersionData
+       , HasProtocolConstants
+       )
     => ShouldCallBListener
     -> OldestFirst NE Blund
     -> Maybe PollModifier
