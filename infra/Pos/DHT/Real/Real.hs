@@ -11,7 +11,6 @@ module Pos.DHT.Real.Real
        ) where
 
 
-import           Nub (ordNub)
 -- We'll take 'catch' from Control.Exception
 -- Universum uses the one from Control.Exception.Safe
 import           Universum hiding (catch)
