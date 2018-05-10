@@ -283,10 +283,11 @@ applyBlock' pw b wid = do
     updateWalletState pw wid $ State utxo'' pending'' balance''
 
 -- | Apply the ResolvedBlocks, one at a time, to all wallets in the PassiveWallet
-applyBlocks :: (HasConfiguration, Container (f ResolvedBlock))
-              => PassiveWallet
-              -> OldestFirst f ResolvedBlock
-              -> IO ()
+applyBlocks
+    :: ( HasConfiguration )
+    => PassiveWallet
+    -> OldestFirst [] ResolvedBlock
+    -> IO ()
 applyBlocks pw = mapM_ (applyBlock pw)
 
 updateUtxo :: PrefilteredBlock -> Utxo -> (Utxo, Balance)
