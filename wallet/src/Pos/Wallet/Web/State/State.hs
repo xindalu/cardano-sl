@@ -57,6 +57,7 @@ module Pos.Wallet.Web.State.State
        , testReset
        , createAccount
        , createAccountWithAddress
+       , createAccountWithoutAddresses
        , createWallet
        , addWAddress
        , addCustomAddress
@@ -272,6 +273,15 @@ createAccountWithAddress :: (MonadIO m, HasConfiguration)
                          -> m ()
 createAccountWithAddress db accId accMeta addrMeta =
     updateDisk (A.CreateAccountWithAddress accId accMeta addrMeta) db
+
+createAccountWithoutAddresses
+    :: (MonadIO m, HasConfiguration)
+    => WalletDB
+    -> AccountId
+    -> CAccountMeta
+    -> m ()
+createAccountWithoutAddresses db accId accMeta =
+    updateDisk (A.CreateAccountWithoutAddresses accId accMeta) db
 
 createWallet :: (MonadIO m, HasConfiguration)
              => WalletDB

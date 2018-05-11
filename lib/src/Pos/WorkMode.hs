@@ -55,6 +55,7 @@ import           Pos.Util.LoggerName (HasLoggerName' (..), askLoggerNameDefault,
                                       modifyLoggerNameDefault)
 import           Pos.Util.TimeWarp (CanJsonLog (..))
 import           Pos.Util.UserSecret (HasUserSecret (..))
+import           Pos.Util.UserPublic (HasUserPublic (..))
 import           Pos.Util.Util (HasLens (..))
 import           Pos.WorkMode.Class (MinWorkMode, WorkMode)
 
@@ -109,6 +110,9 @@ instance HasReportingContext (RealModeContext ext) where
 
 instance HasUserSecret (RealModeContext ext) where
     userSecret = rmcNodeContext_L . userSecret
+
+instance HasUserPublic (RealModeContext ext) where
+    userPublic = rmcNodeContext_L . userPublic
 
 instance HasShutdownContext (RealModeContext ext) where
     shutdownContext = rmcNodeContext_L . shutdownContext
