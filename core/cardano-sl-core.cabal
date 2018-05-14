@@ -133,6 +133,7 @@ library
                      , cardano-sl-crypto-test
                      , cardano-sl-networking
                      , cardano-sl-util
+                     , cardano-sl-util-test
                      , cborg
                      , containers
                      , cryptonite
@@ -221,6 +222,7 @@ test-suite test
                      , cardano-sl-core
                      , cardano-sl-crypto
                      , cardano-sl-util
+                     , cardano-sl-util-test
                      , formatting
                      , hspec
                      , QuickCheck
